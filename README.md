@@ -1,5 +1,5 @@
 ```
-
+DATA(pattern) = `(?i)\b([a-zA-Z0-9_]+)\s*:\s*redirected\s+to\s+(?:composition\s+parent\s+|parent\s+|[a-zA-Z0-9_])`.
 CLASS zcl_vdm_diagram_xco_adp DEFINITION
   PUBLIC
   FINAL
