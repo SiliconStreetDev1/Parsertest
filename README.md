@@ -1,63 +1,5 @@
 ```
-" ==============================================================================
-" LOCAL TYPES 
-" Place this section in the "Local Types" tab of your class in Eclipse/ADT
-" ==============================================================================
 
-" 1. Content Wrapper (Holds the Alias and Cardinality)
-CLASS lcl_redirected_content DEFINITION.
-  PUBLIC SECTION.
-    INTERFACES if_xco_cds_composition_content.
-    METHODS constructor IMPORTING alias_name  TYPE string
-                                  cardinality TYPE if_xco_cds_association_content=>ts_cardinality.
-  PRIVATE SECTION.
-    DATA alias_string TYPE string.
-    DATA comp_cardinality TYPE if_xco_cds_association_content=>ts_cardinality.
-ENDCLASS.
-
-CLASS lcl_redirected_content IMPLEMENTATION.
-  METHOD constructor.
-    alias_string = alias_name.
-    comp_cardinality = cardinality.
-  ENDMETHOD.
-  
-  METHOD if_xco_cds_composition_content~get_alias.
-    rv_alias = alias_string.
-  ENDMETHOD.
-  
-  METHOD if_xco_cds_composition_content~get_cardinality.
-    rs_cardinality = comp_cardinality.
-  ENDMETHOD.
-ENDCLASS.
-
-
-" 2. Composition Wrapper (Holds the Target and returns the Content)
-CLASS lcl_redirected_composition DEFINITION.
-  PUBLIC SECTION.
-    INTERFACES if_xco_cds_composition.
-    METHODS constructor IMPORTING target_name TYPE sxco_cds_object_name 
-                                  alias_name  TYPE string
-                                  cardinality TYPE if_xco_cds_association_content=>ts_cardinality.
-  PRIVATE SECTION.
-    DATA content_ref TYPE REF TO if_xco_cds_composition_content.
-ENDCLASS.
-
-CLASS lcl_redirected_composition IMPLEMENTATION.
-  METHOD constructor.
-    if_xco_cds_composition~target = target_name.
-    content_ref = NEW lcl_redirected_content( alias_name  = alias_name 
-                                              cardinality = cardinality ).
-  ENDMETHOD.
-  
-  METHOD if_xco_cds_composition~content.
-    ro_content = content_ref.
-  ENDMETHOD.
-ENDCLASS.
-
-
-" ==============================================================================
-" GLOBAL CLASS DEFINITION & IMPLEMENTATION
-" ==============================================================================
 CLASS zcl_vdm_diagram_xco_adp DEFINITION
   PUBLIC
   FINAL
@@ -66,20 +8,13 @@ CLASS zcl_vdm_diagram_xco_adp DEFINITION
   PUBLIC SECTION.
     INTERFACES zif_vdm_diagram_xco_adapter .
 
-    ALIASES get_associations
-      FOR zif_vdm_diagram_xco_adapter~get_associations .
-    ALIASES get_cardinality
-      FOR zif_vdm_diagram_xco_adapter~get_cardinality .
-    ALIASES get_cds_name_by_ddl
-      FOR zif_vdm_diagram_xco_adapter~get_cds_name_from_ddl .
-    ALIASES get_cds_type
-      FOR zif_vdm_diagram_xco_adapter~get_cds_type .
-    ALIASES get_compositions
-      FOR zif_vdm_diagram_xco_adapter~get_compositions .
-    ALIASES get_fields
-      FOR zif_vdm_diagram_xco_adapter~get_fields .
-    ALIASES get_sources
-      FOR zif_vdm_diagram_xco_adapter~get_sources .
+    ALIASES get_associations FOR zif_vdm_diagram_xco_adapter~get_associations .
+    ALIASES get_cardinality  FOR zif_vdm_diagram_xco_adapter~get_cardinality .
+    ALIASES get_cds_name_by_ddl FOR zif_vdm_diagram_xco_adapter~get_cds_name_from_ddl .
+    ALIASES get_cds_type     FOR zif_vdm_diagram_xco_adapter~get_cds_type .
+    ALIASES get_compositions FOR zif_vdm_diagram_xco_adapter~get_compositions .
+    ALIASES get_fields       FOR zif_vdm_diagram_xco_adapter~get_fields .
+    ALIASES get_sources      FOR zif_vdm_diagram_xco_adapter~get_sources .
 
   PROTECTED SECTION.
     "! Reads the raw DDL source code from the database using standard DDIC APIs
@@ -97,14 +32,19 @@ CLASS zcl_vdm_diagram_xco_adp DEFINITION
       RETURNING
         VALUE(matches) TYPE match_result_tab.
 
-    "! Parses the DDL source to find compositions missed by XCO and appends them
-    "! @parameter cds_name     | The name of the projection view
-    "! @parameter compositions | The XCO compositions table to be enriched
+    "! Parses DDL to find missed redirected compositions and appends native XCO handles
     METHODS enrich_redirected_compositions
       IMPORTING
         cds_name     TYPE sxco_cds_object_name
       CHANGING
         compositions TYPE sxco_t_cds_compositions.
+
+    "! Parses DDL to find missed redirected associations/parents and appends native XCO handles
+    METHODS enrich_redirected_associations
+      IMPORTING
+        cds_name     TYPE sxco_cds_object_name
+      CHANGING
+        associations TYPE sxco_t_cds_associations.
 
   PRIVATE SECTION.
     TYPES: BEGIN OF ddl_cache_entry,
@@ -127,10 +67,7 @@ CLASS zcl_vdm_diagram_xco_adp DEFINITION
     DATA type_cache  TYPE HASHED TABLE OF ty_type_cache WITH UNIQUE KEY cds_name.
 ENDCLASS.
 
-
-
 CLASS zcl_vdm_diagram_xco_adp IMPLEMENTATION.
-
 
   METHOD extract_regex_matches.
     DATA regex_object TYPE REF TO cl_abap_regex.
@@ -186,21 +123,15 @@ CLASS zcl_vdm_diagram_xco_adp IMPLEMENTATION.
           RETURN.
         ENDIF.
 
-        " Capture Group 1: The Alias (e.g., _Item)
-        " Capture Group 2: The Target Entity (e.g., ZC_Item_View)
-        DATA(pattern) = |(?i)\\b([a-zA-Z0-9_]+)\\s*:\\s*redirected\\s+to\\s+composition\\s+child\\s+([a-zA-Z0-9_]+)|.
+        " Find aliases explicitly redirected to composition child
+        DATA(pattern) = |(?i)\\b([a-zA-Z0-9_]+)\\s*:\\s*redirected\\s+to\\s+composition\\s+child|.
         DATA(matches) = extract_regex_matches( pattern = pattern text = source_code ).
 
         LOOP AT matches INTO DATA(match).
-          IF lines( match-submatches ) = 2.
-            
+          IF lines( match-submatches ) >= 1.
             DATA(alias_match) = match-submatches[ 1 ].
             DATA(alias_name)  = substring( val = source_code off = alias_match-offset len = alias_match-length ).
 
-            DATA(target_match) = match-submatches[ 2 ].
-            DATA(target_name)  = to_upper( substring( val = source_code off = target_match-offset len = target_match-length ) ).
-
-            " --- DUPLICATE PREVENTION ---
             DATA(is_duplicate) = abap_false.
             LOOP AT compositions INTO DATA(existing_comp).
               IF to_upper( existing_comp->content( )->get_alias( ) ) = to_upper( alias_name ).
@@ -209,40 +140,53 @@ CLASS zcl_vdm_diagram_xco_adp IMPLEMENTATION.
               ENDIF.
             ENDLOOP.
 
-            " --- CARRIER INSTANTIATION & CARDINALITY LOOKUP ---
+            " Explicitly request the projection view handle to enforce native projection targeting (No Ghost Lines)
             IF is_duplicate = abap_false.
-              " Default cardinality if lookup fails
-              DATA(true_cardinality) = VALUE if_xco_cds_association_content=>ts_cardinality( min = 0 max = 2147483647 ). 
-              
-              " Drop down to the Base View to extract the original developer cardinality natively
-              DATA(base_sources) = me->get_sources( cds_name ).
-              IF lines( base_sources ) > 0.
-                DATA(base_view) = base_sources[ 1 ].
-                
-                " Retrieve native compositions from the underlying TP view
-                DATA(base_compositions) = me->get_compositions( base_view ).
-                LOOP AT base_compositions INTO DATA(base_comp).
-                  IF to_upper( base_comp->content( )->get_alias( ) ) = to_upper( alias_name ).
-                    true_cardinality = base_comp->content( )->get_cardinality( ).
-                    EXIT.
-                  ENDIF.
-                ENDLOOP.
+              IF me->get_cds_type( cds_name ) = 'P'. 
+                APPEND xco_cds=>projection_view( cds_name )->composition( CONV #( alias_name ) ) TO compositions.
               ENDIF.
-
-              " Wrap target, alias, and resolved base-cardinality in the local carrier class
-              DATA(redirected_composition) = NEW lcl_redirected_composition( 
-                                             target_name = CONV #( target_name ) 
-                                             alias_name  = alias_name
-                                             cardinality = true_cardinality ).
-                                             
-              APPEND redirected_composition TO compositions.
             ENDIF.
-
           ENDIF.
         ENDLOOP.
-
       CATCH cx_root.
-        " Silently catch framework errors and rely on the original XCO results
+        RETURN.
+    ENDTRY.
+  ENDMETHOD.
+
+
+  METHOD enrich_redirected_associations.
+    TRY.
+        DATA(source_code) = get_ddl_source( cds_name ).
+        IF source_code IS INITIAL.
+          RETURN.
+        ENDIF.
+
+        " Find aliases redirected to parent or composition parent or standard redirected
+        DATA(pattern) = |(?i)\\b([a-zA-Z0-9_]+)\\s*:\\s*redirected\\s+to\\s+(?:composition\\s+parent\\s+|parent\\s+|[a-zA-Z0-9_])|.
+        DATA(matches) = extract_regex_matches( pattern = pattern text = source_code ).
+
+        LOOP AT matches INTO DATA(match).
+          IF lines( match-submatches ) >= 1.
+            DATA(alias_match) = match-submatches[ 1 ].
+            DATA(alias_name)  = substring( val = source_code off = alias_match-offset len = alias_match-length ).
+
+            DATA(is_duplicate) = abap_false.
+            LOOP AT associations INTO DATA(existing_assoc).
+              IF to_upper( existing_assoc->content( )->get_alias( ) ) = to_upper( alias_name ).
+                is_duplicate = abap_true.
+                EXIT.
+              ENDIF.
+            ENDLOOP.
+
+            " Explicitly request the projection view handle to enforce native projection targeting
+            IF is_duplicate = abap_false.
+              IF me->get_cds_type( cds_name ) = 'P'. 
+                APPEND xco_cds=>projection_view( cds_name )->association( CONV #( alias_name ) ) TO associations.
+              ENDIF.
+            ENDIF.
+          ENDIF.
+        ENDLOOP.
+      CATCH cx_root.
         RETURN.
     ENDTRY.
   ENDMETHOD.
@@ -358,16 +302,6 @@ CLASS zcl_vdm_diagram_xco_adp IMPLEMENTATION.
   ENDMETHOD.
 
 
-  METHOD zif_vdm_diagram_xco_adapter~get_associations.
-    CASE me->get_cds_type( cds_name ).
-      WHEN 'V'. associations = xco_cds=>view( cds_name )->associations->all->get( ).
-      WHEN 'W'. associations = xco_cds=>view_entity( cds_name )->associations->all->get( ).
-      WHEN 'P'. associations = xco_cds=>projection_view( cds_name )->associations->all->get( ).
-      WHEN OTHERS. CLEAR associations.
-    ENDCASE.
-  ENDMETHOD.
-
-
   METHOD zif_vdm_diagram_xco_adapter~get_cardinality.
     cardinality = currentcardinality.
 
@@ -420,8 +354,21 @@ CLASS zcl_vdm_diagram_xco_adp IMPLEMENTATION.
   ENDMETHOD.
 
 
+  METHOD zif_vdm_diagram_xco_adapter~get_associations.
+    CASE me->get_cds_type( cds_name ).
+      WHEN 'V'. associations = xco_cds=>view( cds_name )->associations->all->get( ).
+      WHEN 'W'. associations = xco_cds=>view_entity( cds_name )->associations->all->get( ).
+      WHEN 'P'. associations = xco_cds=>projection_view( cds_name )->associations->all->get( ).
+      WHEN OTHERS. CLEAR associations.
+    ENDCASE.
+
+    enrich_redirected_associations(
+      EXPORTING cds_name     = cds_name
+      CHANGING  associations = associations ).
+  ENDMETHOD.
+
+
   METHOD zif_vdm_diagram_xco_adapter~get_compositions.
-    " Standard XCO Extraction
     CASE me->get_cds_type( cds_name ).
       WHEN 'V'. compositions = xco_cds=>view( cds_name )->compositions->all->get( ).
       WHEN 'W'. compositions = xco_cds=>view_entity( cds_name )->compositions->all->get( ).
@@ -429,199 +376,9 @@ CLASS zcl_vdm_diagram_xco_adp IMPLEMENTATION.
       WHEN OTHERS. CLEAR compositions.
     ENDCASE.
 
-    " Augment the table with missing DDL redirections
     enrich_redirected_compositions(
       EXPORTING cds_name     = cds_name
       CHANGING  compositions = compositions ).
-  ENDMETHOD.
-
-ENDCLASS.
-
-
-"! <p class="shorttext synchronized">VDM Cytoscape JSON Renderer (XCO Framework)</p>
-"! Generates a structured JSON payload for Cytoscape.js using the modern XCO library.
-"! Inherits from the standard base class to utilize the text buffer and selection state.
-CLASS zcl_vdm_diagram_cytoscape DEFINITION
-  PUBLIC
-  INHERITING FROM zcl_vdm_diagram_base
-  FINAL
-  CREATE PUBLIC .
-
-  PUBLIC SECTION.
-    TYPES: BEGIN OF ty_format,
-             layout_algorithm TYPE string,     
-             theme            TYPE string,     
-             animate          TYPE abap_bool,  
-             node_spacing     TYPE i,          
-           END OF ty_format.
-
-    METHODS constructor IMPORTING format TYPE ty_format OPTIONAL.
-
-    METHODS zif_vdm_diagram_hooks~on_start REDEFINITION.
-    METHODS zif_vdm_diagram_hooks~on_end REDEFINITION.
-    METHODS zif_vdm_diagram_hooks~on_entity_start REDEFINITION.
-    METHODS zif_vdm_diagram_hooks~on_entity_end REDEFINITION.
-    METHODS zif_vdm_diagram_hooks~on_base_elements REDEFINITION.
-    METHODS zif_vdm_diagram_hooks~on_fields REDEFINITION.
-    METHODS zif_vdm_diagram_hooks~on_associations REDEFINITION.
-    METHODS zif_vdm_diagram_hooks~on_relationship REDEFINITION.
-    METHODS zif_vdm_diagram_hooks~on_legend REDEFINITION.
-
-    TYPES: BEGIN OF ty_node_data,
-             id           TYPE string,
-             label        TYPE string,
-             is_focal     TYPE abap_bool,
-             is_union     TYPE abap_bool,
-             keys         TYPE string_table,
-             standard     TYPE string_table,
-             base_sources TYPE string_table,
-             associations TYPE string_table,
-           END OF ty_node_data.
-
-    TYPES: BEGIN OF ty_node,
-             data TYPE ty_node_data,
-           END OF ty_node.
-
-    TYPES: BEGIN OF ty_edge_data,
-             id            TYPE string,
-             source        TYPE string,
-             target        TYPE string,
-             label         TYPE string,
-             cardinality   TYPE string,
-             relation_type TYPE string,
-             color_hint    TYPE string,
-             source_anchor TYPE string,
-           END OF ty_edge_data.
-
-    TYPES: BEGIN OF ty_edge,
-             data TYPE ty_edge_data,
-           END OF ty_edge.
-
-    TYPES: BEGIN OF ty_graph_config,
-             format TYPE ty_format,
-           END OF ty_graph_config.
-
-    TYPES: BEGIN OF ty_elements,
-             config TYPE ty_graph_config,
-             nodes  TYPE STANDARD TABLE OF ty_node WITH EMPTY KEY,
-             edges  TYPE STANDARD TABLE OF ty_edge WITH EMPTY KEY,
-           END OF ty_elements.
-
-  PRIVATE SECTION.
-    DATA format       TYPE ty_format.
-    DATA elements     TYPE ty_elements.
-    DATA current_node TYPE ty_node.
-
-    METHODS serialize_to_json RETURNING VALUE(result) TYPE string.
-
-ENDCLASS.
-
-
-
-CLASS zcl_vdm_diagram_cytoscape IMPLEMENTATION.
-
-  METHOD constructor.
-    super->constructor( ).
-
-    IF format IS INITIAL.
-      me->format-layout_algorithm = 'cose'.
-      me->format-theme            = 'fiori_light'.
-      me->format-animate          = abap_true.
-      me->format-node_spacing     = 100.
-    ELSE.
-      me->format = format.
-    ENDIF.
-
-    CLEAR: me->elements, me->current_node.
-  ENDMETHOD.
-
-  METHOD zif_vdm_diagram_hooks~on_start.
-    CLEAR me->elements.
-    me->elements-config-format = me->format.
-  ENDMETHOD.
-
-  METHOD zif_vdm_diagram_hooks~on_entity_start.
-    me->current_node = VALUE #(
-      data = VALUE #(
-        id       = alias
-        label    = alias
-        is_focal = is_focal_entity
-      )
-    ).
-  ENDMETHOD.
-
-  METHOD zif_vdm_diagram_hooks~on_base_elements.
-    me->current_node-data-is_union = is_union_entity.
-    LOOP AT base_sources INTO DATA(source).
-      APPEND source TO me->current_node-data-base_sources.
-    ENDLOOP.
-  ENDMETHOD.
-
-  METHOD zif_vdm_diagram_hooks~on_fields.
-    IF selection-keys = abap_true.
-      LOOP AT key_fields INTO DATA(key).
-        APPEND key TO me->current_node-data-keys.
-      ENDLOOP.
-    ENDIF.
-
-    IF standard_fields IS NOT INITIAL AND selection-fields = abap_true.
-      LOOP AT standard_fields INTO DATA(field).
-        APPEND field TO me->current_node-data-standard.
-      ENDLOOP.
-    ENDIF.
-  ENDMETHOD.
-
-  METHOD zif_vdm_diagram_hooks~on_associations.
-    LOOP AT association_aliases INTO DATA(assoc).
-      APPEND assoc TO me->current_node-data-associations.
-    ENDLOOP.
-  ENDMETHOD.
-
-  METHOD zif_vdm_diagram_hooks~on_entity_end.
-    APPEND me->current_node TO me->elements-nodes.
-    CLEAR me->current_node.
-  ENDMETHOD.
-
-  METHOD zif_vdm_diagram_hooks~on_relationship.
-    DATA(color_hint) = SWITCH string( relationship_type
-      WHEN zcl_vdm_diagram_generator=>c_relation_type-composition THEN '#800080' " Purple
-      WHEN zcl_vdm_diagram_generator=>c_relation_type-association THEN '#188918' " Green
-      ELSE '#32363a' ).
-
-    DATA(source_anchor) = COND string(
-      WHEN selection-associations_fields = abap_true AND association_alias IS NOT INITIAL
-      THEN association_alias
-      ELSE ''
-    ).
-
-    DATA(edge) = VALUE ty_edge(
-      data = VALUE #(
-        id            = |{ source_alias }_to_{ target_alias }_{ association_alias }|
-        source        = source_alias
-        target        = target_alias
-        label         = association_alias
-        cardinality   = cardinality_text
-        relation_type = relationship_type
-        color_hint    = color_hint
-        source_anchor = source_anchor
-      )
-    ).
-
-    APPEND edge TO me->elements-edges.
-  ENDMETHOD.
-
-  METHOD zif_vdm_diagram_hooks~on_legend.
-  ENDMETHOD.
-
-  METHOD zif_vdm_diagram_hooks~on_end.
-    DATA(json_output) = me->serialize_to_json( ).
-    add_text( json_output ).
-  ENDMETHOD.
-
-  METHOD serialize_to_json.
-    result = xco_cp_json=>data->from_abap( me->elements )->apply(
-      VALUE #( ( xco_cp_json=>transformation->underscore_to_camel_case ) )
-    )->to_string( ).
   ENDMETHOD.
 
 ENDCLASS.
